@@ -63,9 +63,9 @@ fn error_reporter(err: std::io::Error) {
 // }
 
 
-fn write_to_db(conn: &mut postgres::Client, channel: &str, username: &str, message: &str) -> Result<(), Box<dyn Error>> {
+fn write_to_db(conn: &mut postgres::Client, channel: &str, username: &str, user_id: &str, message: &str) -> Result<(), Box<dyn Error>> {
     let mut trans = conn.transaction()?;
-    trans.execute("INSERT INTO messages (channel, date, username, message) VALUES ($1, $2, $3, $4)", &[&channel, &Local::now().format("%H:%M:%S %d/%b/%Y").to_string(), &username, &message])?;
+    trans.execute("INSERT INTO messages (channel, date, username, user_id, message) VALUES ($1, $2, $3, $4, $5)", &[&channel, &Local::now().format("%H:%M:%S %d/%b/%Y").to_string(), &username, &user_id, &message])?;
     trans.commit()?;
 
     Ok(())
@@ -109,7 +109,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let _message_lower = raw_message.to_lowercase();
 
                     println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%H:%M:%S %d/%b/%Y").to_string(), raw_user, user["user-id"], raw_message);
-                    write_to_db(&mut conn, channel, raw_user, raw_message).unwrap_or_else(|err| eprintln!("Error writing message to database: {:?}", err));
+                    write_to_db(&mut conn, channel, raw_user, &user["user-id"], raw_message).unwrap_or_else(|err| eprintln!("Error writing message to database: {:?}", err));
 
                 }
                 if buffer.contains("PING :tmi.twitch.tv") {
@@ -163,6 +163,7 @@ fn main() {
                     channel VARCHAR(25),
                     date VARCHAR(25),
                     username VARCHAR(30),
+                    user_id VARCHAR(30),
                     message VARCHAR(600) NOT NULL);", &[])?;
         trans.commit().unwrap();
         conn.close()?;
