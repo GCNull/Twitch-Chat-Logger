@@ -13,8 +13,7 @@ use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
 use serde_json::Value;
 use termion::color;
-
-const BOT_VERSION: f32 = 1.3;
+const BOT_VERSION: f32 = 1.5;
 
 struct Config {
     channel: String,
@@ -52,16 +51,10 @@ fn error_reporter(err: std::io::Error) {
 //     Ok(json_d)
 // }
 
-
-fn write_to_db(conn: &mut postgres::Client, username: &str, user_id: &str, message: &str) -> Result<(), Box<dyn Error>> {
-    conn.execute("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)", &[&Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), &username, &user_id, &message])?;
-    Ok(())
-}
-
 fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
         Ok(socket) => {
-            let mut conn = Client::connect(&get_db_channel(), NoTls).unwrap();
+            let mut message_queue: Vec<String> = Vec::new();
             println!("Chat logger {:?} running", BOT_VERSION);
 
             let mut rng = thread_rng();
@@ -87,6 +80,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                 }
 
                 if buffer.contains("PRIVMSG") {
+                    let mut conn = Client::connect(&get_db_channel(), NoTls)?;
+                    let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
                     let channel: Vec<&str> = buffer.split(" ").collect();
                     let channel = channel[3];
                     let user = extract_tags(&buffer);
@@ -95,22 +90,33 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim();
                     let _message_lower = raw_message.to_lowercase();
 
-                    println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%H:%M:%S %d/%b/%Y").to_string(), raw_user, user["user-id"], raw_message);
-                    if conn.is_closed() {
-                        println!("Resetting connection with database");
-                        break
-                    }
-                    write_to_db(&mut conn, raw_user, &user["user-id"], raw_message).unwrap_or_else(|err| eprintln!("Error writing message to database: {:?}", err));
+                    println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
 
+                    if !message_queue.is_empty() {
+                        for i in message_queue.iter() {
+                            println!("From queue: {}", i);
+                            conn.execute(&stmt, &[])?;
+                        }
+                        // message_queue.clear();
+                    }
+
+                    if conn.execute(&stmt, &[&Local::now().format("%Y-%m-%d %T").to_string(), &raw_user, &user["user-id"], &raw_message]).is_ok() {
+                    } else {
+                        eprintln!("Error writing to db. Adding message to queue and restarting...\n");
+                        message_queue.push(raw_message.to_string());
+                        // break
+                    }
+                    conn.close()?;
+                    drop(conn);
                 }
+
                 if buffer.contains("PING :tmi.twitch.tv") {
                     send_raw_message(&mut wstream, "PONG :tmi.twitch.tv");
-                    println!("[chat_logger.rs] PONG at {}",Local::now().format("%H:%M:%S %d/%b/%Y").to_string());
+                    println!("[chat_logger.rs] PONG at {}",Local::now().format("%T %d/%m/%G").to_string());
                 }
                 buff.clear();
             }
             if std::io::BufRead::read_line(&mut stream, &mut buff).unwrap() == 0 {
-                conn.close().unwrap();
                 socket.shutdown(Shutdown::Write).unwrap_or_else(|err| eprintln!("Failed to shutdown socket: {}", err));
                 eprintln!("\n{}Socket disconnected{}", color::Fg(color::Red), color::Fg(color::Reset));
             }
@@ -143,8 +149,8 @@ fn get_db_channel() -> String {
 }
 
 fn create_database(cc: &str) -> Result<(), Box<dyn Error>> {
-    let mut conn = Client::connect(&get_db_channel(), NoTls).unwrap();
     process::Command::new("sh").arg("scripts/create_db.sh").arg(cc).spawn()?.wait()?;
+    let mut conn = Client::connect(&get_db_channel(), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
                     id SERIAL PRIMARY KEY,
                     date VARCHAR(25),
@@ -162,6 +168,11 @@ fn main() {
         process::exit(1);
     });
 
+    create_database(&config.channel).unwrap_or_else(|err| {
+        println!("Failed to setup database for {}:\n{:?}", config.channel, err);
+        process::exit(1);
+    });
+
     loop {
         remove_file(".env").unwrap_or_else(|err| {
             if err.to_string().to_lowercase().contains("no such file") {println!(".env file not found. Continuing...")}});
@@ -169,14 +180,9 @@ fn main() {
 
         wfile.write(format!("postgresql://postgres:postgres@localhost:5432/{}", config.channel).as_bytes()).unwrap();
 
-        create_database(&config.channel).unwrap_or_else(|err| {
-            println!("Failed to setup database for {}:\n{:?}", config.channel, err);
-            process::exit(1);
-        });
-
         bot(config.channel.to_string()).unwrap_or_else(|err| {
             eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))});
         println!("Bot function ending. Attempting to repeat loop...");
-        sleep(250);
+        sleep(50);
     }
 }
