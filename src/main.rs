@@ -8,7 +8,7 @@ use std::process;
 use std::thread;
 use std::time::*;
 
-use chrono::prelude::*;
+use chrono::{NaiveDate, NaiveDateTime, prelude::*};
 use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
 // use serde_json::Value;
@@ -89,7 +89,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim().to_string();
                     let raw_user = raw_user.to_string();
                     let user_id = user["user-id"].to_string();
-                    // println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
+                    println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
 
                     match Client::connect(&get_db_channel(), NoTls) {
                         Ok(mut conn) => {
@@ -104,16 +104,22 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                 }
                                 message_queue.clear();
                             }
+                            let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
 
-                            if conn.execute(&stmt, &[&Local::now().format("%Y-%m-%d %T").to_string(), &raw_user, &user["user-id"], &raw_message]).is_ok() {
-                            } else {
-                                eprintln!("Errorrrrrrrrrrrrrrrrrrrr writing to db. Adding message to queue and restarting...\n");
-                                // message_queue.push(RAW_MESSAGE.to_string());
+                            match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
+                                    let message_to_queue = format!("{} {} {} {}", nt, raw_user, user_id, raw_message);
+                                    println!("{}", message_to_queue);
+                                    message_queue.push(message_to_queue);
+                                    break;
+                                }
                             }
                             conn.close()?;
                         }
                         Err(e) => {
-                            eprintln!("Error writing to db: {:?}\nAdding message to queue and restarting...", e);
+                            eprintln!("Error 2 writing to db: {:?}\nAdding message to queue and restarting...", e);
                             let message_to_queue = format!("{} {} {} {}", Local::now().format("%Y-%m-%d %T").to_string(), raw_user, user_id, raw_message);
                             println!("{}", message_to_queue);
                             message_queue.push(message_to_queue);
@@ -164,7 +170,7 @@ fn create_database(cc: &str) -> Result<(), Box<dyn Error>> {
     let mut conn = Client::connect(&get_db_channel(), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
                     id SERIAL PRIMARY KEY,
-                    date VARCHAR(25),
+                    date TIMESTAMP WITHOUT TIME ZONE,
                     username VARCHAR(40),
                     user_id VARCHAR(30),
                     message VARCHAR(700) NOT NULL);", &[])?;
