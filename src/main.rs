@@ -11,9 +11,10 @@ use std::time::*;
 use chrono::prelude::*;
 use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
-use serde_json::Value;
+// use serde_json::Value;
 use termion::color;
-const BOT_VERSION: f32 = 1.5;
+
+const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct Config {
     channel: String,
@@ -55,7 +56,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
         Ok(socket) => {
             let mut message_queue: Vec<String> = Vec::new();
-            println!("Chat logger {:?} running", BOT_VERSION);
+            println!("Chat logger {} running", BOT_VERSION);
 
             let mut rng = thread_rng();
             let mut stream =  BufReader::new(&socket);
@@ -80,34 +81,44 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                 }
 
                 if buffer.contains("PRIVMSG") {
-                    let mut conn = Client::connect(&get_db_channel(), NoTls)?;
-                    let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
                     let channel: Vec<&str> = buffer.split(" ").collect();
                     let channel = channel[3];
                     let user = extract_tags(&buffer);
                     let raw_user: Vec<&str> = user["user-type"].split(|c| c == '!' || c == '@').collect();
                     let raw_user = raw_user[1];
-                    let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim();
-                    let _message_lower = raw_message.to_lowercase();
+                    let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim().to_string();
+                    let raw_user = raw_user.to_string();
+                    let user_id = user["user-id"].to_string();
+                    // println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
 
-                    println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
+                    match Client::connect(&get_db_channel(), NoTls) {
+                        Ok(mut conn) => {
+                            let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
 
-                    if !message_queue.is_empty() {
-                        for i in message_queue.iter() {
-                            println!("From queue: {}", i);
-                            conn.execute(&stmt, &[])?;
+                            if !message_queue.is_empty() {
+                                for i in message_queue.iter() {
+                                    let split: Vec<_> = i.split_whitespace().collect();
+                                    let dt = format!("{} {}", split[0], split[1]);
+                                    println!("From queue: {}", i);
+                                    conn.execute(&stmt, &[&dt, &split[2], &split[3], &split[4]])?;
+                                }
+                                message_queue.clear();
+                            }
+
+                            if conn.execute(&stmt, &[&Local::now().format("%Y-%m-%d %T").to_string(), &raw_user, &user["user-id"], &raw_message]).is_ok() {
+                            } else {
+                                eprintln!("Errorrrrrrrrrrrrrrrrrrrr writing to db. Adding message to queue and restarting...\n");
+                                // message_queue.push(RAW_MESSAGE.to_string());
+                            }
+                            conn.close()?;
                         }
-                        // message_queue.clear();
+                        Err(e) => {
+                            eprintln!("Error writing to db: {:?}\nAdding message to queue and restarting...", e);
+                            let message_to_queue = format!("{} {} {} {}", Local::now().format("%Y-%m-%d %T").to_string(), raw_user, user_id, raw_message);
+                            println!("{}", message_to_queue);
+                            message_queue.push(message_to_queue);
+                        }
                     }
-
-                    if conn.execute(&stmt, &[&Local::now().format("%Y-%m-%d %T").to_string(), &raw_user, &user["user-id"], &raw_message]).is_ok() {
-                    } else {
-                        eprintln!("Error writing to db. Adding message to queue and restarting...\n");
-                        message_queue.push(raw_message.to_string());
-                        // break
-                    }
-                    conn.close()?;
-                    drop(conn);
                 }
 
                 if buffer.contains("PING :tmi.twitch.tv") {
