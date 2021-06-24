@@ -105,7 +105,6 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                 message_queue.clear();
                             }
                             let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
-
                             match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
                                 Ok(_) => {}
                                 Err(e) => {
