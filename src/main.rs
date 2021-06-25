@@ -168,7 +168,6 @@ unsafe fn create_database() -> Result<(), Box<dyn Error>> {
     process::Command::new("sh").arg("scripts/create_db.sh").arg(CHANNEL.to_string()).spawn()?.wait()?;
     let mut conn = Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
-                    id SERIAL PRIMARY KEY,
                     date TIMESTAMP WITHOUT TIME ZONE,
                     username VARCHAR(40),
                     user_id VARCHAR(30),
