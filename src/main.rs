@@ -123,9 +123,9 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                     eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
                                     let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
                                     println!("Queuing {}", message_to_queue);
-                                    message_queue.push(message_to_queue);
                                     let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                                    wfile.write(wfile.as_bytes()).unwrap_or_default();
+                                    wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                                    message_queue.push(message_to_queue);
                                     socket.shutdown(Both).unwrap_or_default();
                                     break;
                                 }
@@ -136,9 +136,9 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                             eprintln!("Error 2 writing to db: {:?}\nAdding message to queue and restarting...", e);
                             let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
                             println!("Queuing {}", message_to_queue);
-                            message_queue.push(message_to_queue);
                             let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                            wfile.write(wfile.as_bytes()).unwrap_or_default();
+                            wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                            message_queue.push(message_to_queue);
                         }
                     }
                 }
