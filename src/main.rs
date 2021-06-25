@@ -62,11 +62,11 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
             let mut stream =  BufReader::new(&socket);
             let mut wstream = BufWriter::new(&socket);
             let mut buff = String::new();
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/tags");
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/commands");
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/membership");
-            send_raw_message(&mut wstream, format!("NICK justinfan{}", rng.gen_range(10000000..99999999)).as_str());
-            send_raw_message(&mut wstream, format!("JOIN #{}", channel).as_str());
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/tags").unwrap_or_else(|err|{error_reporter(err);});
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/commands").unwrap_or_else(|err|{error_reporter(err);});
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/membership").unwrap_or_else(|err|{error_reporter(err);});
+            send_raw_message(&mut wstream, format!("NICK justinfan{}", rng.gen_range(10000000..99999999)).as_str()).unwrap_or_else(|err|{error_reporter(err);});
+            send_raw_message(&mut wstream, format!("JOIN #{}", channel).as_str()).unwrap_or_else(|err|{error_reporter(err);});
 
             while std::io::BufRead::read_line(&mut stream, &mut buff)? > 0 {
                 let buffer = buff.trim();
@@ -127,7 +127,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                 }
 
                 if buffer.contains("PING :tmi.twitch.tv") {
-                    send_raw_message(&mut wstream, "PONG :tmi.twitch.tv");
+                    send_raw_message(&mut wstream, "PONG :tmi.twitch.tv").unwrap_or_else(|err|{error_reporter(err);});
                     println!("[chat_logger.rs] PONG at {}",Local::now().format("%T %d/%m/%G").to_string());
                 }
                 buff.clear();
