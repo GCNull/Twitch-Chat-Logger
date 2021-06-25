@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-// use std::fs::{read_to_string};
+use std::fs::{OpenOptions, read_to_string, remove_file};
 use std::io::{BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream};
 use std::process;
@@ -11,10 +11,10 @@ use std::time::*;
 use chrono::{NaiveDate, NaiveDateTime, prelude::*};
 use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
+// use serde_json::Value;
 use termion::color;
 
 const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
-static mut CHANNEL: String = String::new();
 
 struct Config {
     channel: String,
@@ -54,7 +54,7 @@ fn error_reporter(err: std::io::Error) {
 
 fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
-        Ok(socket) => unsafe {
+        Ok(socket) => {
             let mut message_queue: Vec<String> = Vec::new();
             println!("Chat logger {} running", BOT_VERSION);
 
@@ -91,7 +91,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let user_id = user["user-id"].to_string();
                     println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
 
-                    match Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls) {
+                    match Client::connect(&get_db_channel(), NoTls) {
                         Ok(mut conn) => {
                             let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
 
@@ -140,11 +140,17 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
         Err(e) => error_reporter(e),
     };
 
-    fn send_raw_message<W: Write>(w: &mut W, msg: &str) {
+    fn send_raw_message<W: Write>(w: &mut W, msg: &str) -> Result<(), std::io::Error> {
         let message = format!("{}\r\n", msg);
-        w.write(message.as_bytes()).expect("Failed to write message into the buffer");
-        w.flush().expect("Failed to send message");
-        // print!("Sent: {}", message);
+        if w.write(message.as_bytes()).is_ok() {
+            if w.flush().is_ok() {}
+            else {
+                eprintln!("Failed to send raw data")
+            }
+        } else {
+            eprintln!("Failed to write raw data into buffer");
+        }
+        Ok(())
     }
 
     fn extract_tags(tags: &str) -> HashMap<String, String> {
@@ -159,15 +165,16 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// fn get_db_channel() -> String {
-//     let rfile = read_to_string(".env").unwrap();
-//     rfile
-// }
+fn get_db_channel() -> String {
+    let rfile = read_to_string(".env").unwrap();
+    rfile
+}
 
-unsafe fn create_database() -> Result<(), Box<dyn Error>> {
-    process::Command::new("sh").arg("scripts/create_db.sh").arg(CHANNEL.to_string()).spawn()?.wait()?;
-    let mut conn = Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls).unwrap();
+fn create_database(cc: &str) -> Result<(), Box<dyn Error>> {
+    process::Command::new("sh").arg("scripts/create_db.sh").arg(cc).spawn()?.wait()?;
+    let mut conn = Client::connect(&get_db_channel(), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
+                    id SERIAL PRIMARY KEY,
                     date TIMESTAMP WITHOUT TIME ZONE,
                     username VARCHAR(40),
                     user_id VARCHAR(30),
@@ -176,33 +183,28 @@ unsafe fn create_database() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn main() {
+fn main() {
     std::process::Command::new("clear").status().unwrap();
     let config = Config::new(env::args()).unwrap_or_else(|err| {
         eprintln!("{}Error: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset));
         process::exit(1);
     });
 
-    unsafe {
-        CHANNEL = config.channel;
-        create_database().unwrap_or_else(|err| {
-            println!("Failed to setup database for {}:\n{:?}", CHANNEL, err);
-            process::exit(1);
-        });
-    }
+    create_database(&config.channel).unwrap_or_else(|err| {
+        println!("Failed to setup database for {}:\n{:?}", config.channel, err);
+        process::exit(1);
+    });
 
     loop {
-        // remove_file(format!("{}.env", &config.channel)).unwrap_or_else(|err| {
-        //     if err.to_string().to_lowercase().contains("no such file") {println!(".env file not found. Continuing...")}});
-        // let mut wfile = OpenOptions::new().create(true).append(true).open(format!("{}.env", &config.channel)).unwrap();
-        // wfile.write(format!("postgresql://postgres:postgres@localhost:5432/{}", config.channel).as_bytes()).unwrap();
+        remove_file(".env").unwrap_or_else(|err| {
+            if err.to_string().to_lowercase().contains("no such file") {println!(".env file not found. Continuing...")}});
+        let mut wfile = OpenOptions::new().create(true).append(true).open(".env").unwrap();
 
+        wfile.write(format!("postgresql://postgres:postgres@localhost:5432/{}", config.channel).as_bytes()).unwrap();
 
-        unsafe {
-            bot(CHANNEL.to_string()).unwrap_or_else(|err| {
-                eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))});
-            println!("Bot function ending. Attempting to repeat loop...");
-            sleep(50);
-        }
+        bot(config.channel.to_string()).unwrap_or_else(|err| {
+            eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))});
+        println!("Bot function ending. Attempting to repeat loop...");
+        sleep(50);
     }
 }
