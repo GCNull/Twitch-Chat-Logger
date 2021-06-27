@@ -95,42 +95,52 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 
                     match Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls) {
                         Ok(mut conn) => {
-                            let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
+                            let trans_pid = conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]).unwrap();
+                            if trans_pid.is_empty() {
+                                let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
+                                if !message_queue.is_empty() {
+                                    for i in message_queue.iter() {
+                                        let split: Vec<_> = i.split(" ").collect();
+                                        println!("From queue: {:?}", split);
+                                        let date = NaiveDate::parse_from_str(split[0], "%Y-%m-%d").unwrap();
+                                        let time = NaiveTime::parse_from_str(split[1], "%T").unwrap();
+                                        let nt: NaiveDateTime = NaiveDateTime::new(date, time); // 2021-06-25 00:00:00
+                                        match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4]]) {
+                                            Ok(_) => {}
+                                            Err(e) => {
+                                                println!("{:?}", e);
+                                                socket.shutdown(Both).unwrap_or_default();
+                                            }
 
-                            if !message_queue.is_empty() {
-                                for i in message_queue.iter() {
-                                    let split: Vec<_> = i.split(" ").collect();
-                                    println!("From queue: {:?}", split);
-                                    let date = split[0];
-                                    let time = split[1];
-                                    let nt: NaiveDateTime = NaiveDate::from_ymd(date[0..4].parse::<i32>().unwrap(), date[6..7].parse::<u32>().unwrap(), date[9..10].parse::<u32>().unwrap()).and_hms(time[0..2].parse::<u32>().unwrap(), time[4..5].parse::<u32>().unwrap(), time[7..8].parse::<u32>().unwrap());
-// 2021-06-25 00:00:00
-                                    match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4]]) {
-                                        Ok(t) => println!("ok {:?}", t),
-                                        Err(e) => {
-                                            println!("{:?}", e);
-                                            socket.shutdown(Both).unwrap_or_default();
                                         }
-
+                                    }
+                                    message_queue.clear();
+                                }
+                                let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
+                                match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
+                                        let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
+                                        println!("Queuing {}", message_to_queue);
+                                        let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
+                                        wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                                        message_queue.push(message_to_queue);
+                                        socket.shutdown(Both).unwrap_or_default();
+                                        break;
                                     }
                                 }
-                                message_queue.clear();
+                                conn.close()?;
+
+                            } else {
+                                println!("Messages table is busy adding message to queue...");
+                                let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
+                                println!("Queuing {}", message_to_queue);
+                                let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
+                                wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                                message_queue.push(message_to_queue);
                             }
-                            let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
-                            match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
-                                    let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                    println!("Queuing {}", message_to_queue);
-                                    let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                                    wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
-                                    message_queue.push(message_to_queue);
-                                    socket.shutdown(Both).unwrap_or_default();
-                                    break;
-                                }
-                            }
-                            conn.close()?;
+
                         }
                         Err(e) => {
                             eprintln!("Error 2 writing to db: {:?}\nAdding message to queue and restarting...", e);
