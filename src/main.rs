@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-// use std::fs::{read_to_string};
-use std::io::{BufReader, BufWriter, Write, BufRead};
+use std::fs::{File, OpenOptions, remove_file};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream};
+use std::net::Shutdown::Both;
+use std::path::Path;
 use std::process;
 use std::thread;
 use std::time::*;
@@ -12,9 +14,6 @@ use chrono::{NaiveDate, NaiveDateTime, prelude::*};
 use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
 use termion::color;
-use std::net::Shutdown::Both;
-use std::fs::{OpenOptions, File, remove_file};
-use std::path::Path;
 
 const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut CHANNEL: String = String::new();
@@ -55,20 +54,26 @@ fn error_reporter(err: std::io::Error) {
 //     Ok(json_d)
 // }
 
+fn queue_message(message_to_queue: String) -> Result<(), Box<dyn Error>> {
+    println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
+    let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
+    wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+    Ok(())
+}
+
 fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
         Ok(socket) => unsafe {
             println!("Chat logger {} running in {}", BOT_VERSION, CHANNEL);
-
             let mut rng = thread_rng();
-            let mut stream =  BufReader::new(&socket);
+            let mut stream = BufReader::new(&socket);
             let mut wstream = BufWriter::new(&socket);
             let mut buff = String::new();
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/tags").unwrap_or_else(|err|{error_reporter(err);});
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/commands").unwrap_or_else(|err|{error_reporter(err);});
-            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/membership").unwrap_or_else(|err|{error_reporter(err);});
-            send_raw_message(&mut wstream, format!("NICK justinfan{}", rng.gen_range(10000000..99999999)).as_str()).unwrap_or_else(|err|{error_reporter(err);});
-            send_raw_message(&mut wstream, format!("JOIN #{}", channel).as_str()).unwrap_or_else(|err|{error_reporter(err);});
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/tags").unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/commands").unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, "CAP REQ :twitch.tv/membership").unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, format!("NICK justinfan{}", rng.gen_range(10000000..99999999)).as_str()).unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, format!("JOIN #{}", channel).as_str()).unwrap_or_else(|err| { error_reporter(err); });
 
             while std::io::BufRead::read_line(&mut stream, &mut buff)? > 0 {
                 let buffer = buff.trim();
@@ -78,8 +83,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     println!("Commands request acknowledged")
                 } else if buffer.contains(":tmi.twitch.tv CAP * ACK :twitch.tv/membership") {
                     println!("Membership request acknowledged")
-                }   else if buffer.contains(":Welcome, GLHF!") {
-                    println!("\n[{}]\nConnected to Twitch IRC\n", Local::now().format("%H:%M:%S %d/%b/%Y").to_string());
+                } else if buffer.contains(":Welcome, GLHF!") {
+                    println!("\n[{}]\nConnected to Twitch IRC\n", Local::now().format("%T %d/%m/%G").to_string());
                 }
 
                 if buffer.contains("PRIVMSG") {
@@ -114,7 +119,6 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                                 println!("{:?}", e);
                                                 socket.shutdown(Both).unwrap_or_default();
                                             }
-
                                         }
                                     }
                                     remove_file("queued_messages.txt").unwrap_or_else(|err| error_reporter(err));
@@ -125,37 +129,29 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                     Err(e) => {
                                         eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
                                         let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                        println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
-                                        let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                                        wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
-                                        socket.shutdown(Both).unwrap_or_default();
+                                        queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
+                                        socket.shutdown(Both).unwrap_or_default(); // We do this to break out of the loop imediately instead of on the next message which would cause us to lose a message
                                         break;
                                     }
                                 }
                                 conn.close()?;
-
                             } else {
                                 println!("Messages table is busy adding message to queue...");
                                 let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
-                                let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                                wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                                queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
                             }
-
                         }
                         Err(e) => {
                             eprintln!("Error 2 writing to db: {:?}\nAdding message to queue and restarting...", e);
                             let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                            println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
-                            let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
-                            wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+                            queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
                         }
                     }
                 }
 
                 if buffer.contains("PING :tmi.twitch.tv") {
-                    send_raw_message(&mut wstream, "PONG :tmi.twitch.tv").unwrap_or_else(|err|{error_reporter(err);});
-                    println!("[chat_logger.rs] PONG at {}",Local::now().format("%T %d/%m/%G").to_string());
+                    send_raw_message(&mut wstream, "PONG :tmi.twitch.tv").unwrap_or_else(|err| { error_reporter(err); });
+                    println!("[chat_logger.rs] PONG at {}", Local::now().format("%T %d/%m/%G").to_string());
                 }
                 buff.clear();
             }
@@ -170,8 +166,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     fn send_raw_message<W: Write>(w: &mut W, msg: &str) -> Result<(), std::io::Error> {
         let message = format!("{}\r\n", msg);
         if w.write(message.as_bytes()).is_ok() {
-            if w.flush().is_ok() {}
-            else {
+            if w.flush().is_ok() {} else {
                 eprintln!("Failed to send raw data")
             }
         } else {
@@ -204,7 +199,7 @@ unsafe fn create_database() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-pub(crate) fn main() {
+fn main() {
     std::process::Command::new("clear").status().unwrap();
     let config = Config::new(env::args()).unwrap_or_else(|err| {
         eprintln!("{}Error: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset));
@@ -222,7 +217,8 @@ pub(crate) fn main() {
     loop {
         unsafe {
             bot(CHANNEL.to_string()).unwrap_or_else(|err| {
-                eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))});
+                eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))
+            });
             println!("Bot function ending. Attempting to repeat loop...");
             sleep(50);
         }
