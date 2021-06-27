@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 // use std::fs::{read_to_string};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write, BufRead};
 use std::net::{Shutdown, TcpStream};
 use std::process;
 use std::thread;
@@ -13,7 +13,8 @@ use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
 use termion::color;
 use std::net::Shutdown::Both;
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, File, remove_file};
+use std::path::Path;
 
 const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut CHANNEL: String = String::new();
@@ -57,7 +58,6 @@ fn error_reporter(err: std::io::Error) {
 fn bot(channel: String) -> Result<(), Box<dyn Error>> {
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
         Ok(socket) => unsafe {
-            let mut message_queue: Vec<String> = Vec::new();
             println!("Chat logger {} running in {}", BOT_VERSION, CHANNEL);
 
             let mut rng = thread_rng();
@@ -91,17 +91,20 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim().to_string();
                     let raw_user = raw_user.to_string();
                     let user_id = user["user-id"].to_string();
-                    println!("[{}] [{}] <{}>[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
+                    println!("[{}] [{}] {}[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
 
                     match Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls) {
                         Ok(mut conn) => {
                             let trans_pid = conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]).unwrap();
                             if trans_pid.is_empty() {
                                 let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
-                                if !message_queue.is_empty() {
-                                    for i in message_queue.iter() {
-                                        let split: Vec<_> = i.split(" ").collect();
-                                        println!("From queue: {:?}", split);
+                                if Path::new("queued_messages.txt").exists() {
+                                    let queued_messages_file = File::open("queued_messages.txt")?;
+                                    let read = BufReader::new(queued_messages_file);
+                                    for i in read.lines() {
+                                        let line = i.unwrap_or_default();
+                                        let split: Vec<_> = line.split(" ").collect();
+                                        println!("{}From queue: {:?}{}", color::Fg(color::Green), split, color::Fg(color::Reset));
                                         let date = NaiveDate::parse_from_str(split[0], "%Y-%m-%d").unwrap();
                                         let time = NaiveTime::parse_from_str(split[1], "%T").unwrap();
                                         let nt: NaiveDateTime = NaiveDateTime::new(date, time); // 2021-06-25 00:00:00
@@ -114,7 +117,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 
                                         }
                                     }
-                                    message_queue.clear();
+                                    remove_file("queued_messages.txt").unwrap_or_else(|err| error_reporter(err));
                                 }
                                 let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
                                 match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
@@ -122,10 +125,9 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                     Err(e) => {
                                         eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
                                         let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                        println!("Queuing {}", message_to_queue);
+                                        println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
                                         let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
                                         wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
-                                        message_queue.push(message_to_queue);
                                         socket.shutdown(Both).unwrap_or_default();
                                         break;
                                     }
@@ -135,20 +137,18 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                             } else {
                                 println!("Messages table is busy adding message to queue...");
                                 let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                println!("Queuing {}", message_to_queue);
+                                println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
                                 let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
                                 wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
-                                message_queue.push(message_to_queue);
                             }
 
                         }
                         Err(e) => {
                             eprintln!("Error 2 writing to db: {:?}\nAdding message to queue and restarting...", e);
                             let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                            println!("Queuing {}", message_to_queue);
+                            println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
                             let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
                             wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
-                            message_queue.push(message_to_queue);
                         }
                     }
                 }
