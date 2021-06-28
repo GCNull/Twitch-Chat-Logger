@@ -197,6 +197,8 @@ unsafe fn create_database() -> Result<(), Box<dyn Error>> {
                     username VARCHAR(40),
                     user_id VARCHAR(30),
                     message VARCHAR(700) NOT NULL);", &[])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_date_username ON public.messages USING btree (date, username)", &[])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_username_date ON public.messages USING btree (username, date)", &[])?;
     conn.close()?;
     Ok(())
 }
