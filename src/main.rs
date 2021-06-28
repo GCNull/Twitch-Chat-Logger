@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::fs::{File, OpenOptions, remove_file};
+use std::fs::{File, OpenOptions, remove_file, create_dir};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream};
 use std::net::Shutdown::Both;
@@ -55,13 +55,15 @@ fn error_reporter(err: std::io::Error) {
 // }
 
 fn queue_message(message_to_queue: String) -> Result<(), Box<dyn Error>> {
+    let queued_messages_path: String = format!("channels/{}_queued_messages.txt", unsafe { &CHANNEL });
     println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
-    let mut wfile = OpenOptions::new().create(true).append(true).open("queued_messages.txt").unwrap();
+    let mut wfile = OpenOptions::new().create(true).append(true).open(&queued_messages_path).unwrap();
     wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
     Ok(())
 }
 
 fn bot(channel: String) -> Result<(), Box<dyn Error>> {
+    let queued_messages_path: String = format!("channels/{}_queued_messages.txt", unsafe { &CHANNEL });
     match TcpStream::connect("irc.chat.twitch.tv:6667") {
         Ok(socket) => unsafe {
             println!("Chat logger {} running in {}", BOT_VERSION, CHANNEL);
@@ -103,8 +105,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                             let trans_pid = conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]).unwrap();
                             if trans_pid.is_empty() {
                                 let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
-                                if Path::new("queued_messages.txt").exists() {
-                                    let queued_messages_file = File::open("queued_messages.txt")?;
+                                if Path::new(&queued_messages_path).exists() {
+                                    let queued_messages_file = File::open(&queued_messages_path)?;
                                     let read = BufReader::new(queued_messages_file);
                                     for i in read.lines() {
                                         let line = i.unwrap_or_default();
@@ -113,7 +115,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                         let date = NaiveDate::parse_from_str(split[0], "%Y-%m-%d").unwrap();
                                         let time = NaiveTime::parse_from_str(split[1], "%T").unwrap();
                                         let nt: NaiveDateTime = NaiveDateTime::new(date, time); // 2021-06-25 00:00:00
-                                        match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4]]) {
+                                        match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4..].join(" ")]) {
                                             Ok(_) => {}
                                             Err(e) => {
                                                 println!("{:?}", e);
@@ -121,7 +123,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                             }
                                         }
                                     }
-                                    remove_file("queued_messages.txt").unwrap_or_else(|err| error_reporter(err));
+                                    remove_file(&queued_messages_path).unwrap_or_else(|err| error_reporter(err));
                                 }
                                 let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
                                 match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
@@ -204,6 +206,12 @@ fn main() {
     let config = Config::new(env::args()).unwrap_or_else(|err| {
         eprintln!("{}Error: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset));
         process::exit(1);
+    });
+    create_dir("channels").unwrap_or_else(|err| {
+        if !err.to_string().to_lowercase().contains("file exists") {
+            eprintln!("Error creating \"channels\": {:?}\nQuiting!", err);
+            process::exit(1);
+        }
     });
 
     unsafe {
