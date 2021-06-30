@@ -44,16 +44,6 @@ fn error_reporter(err: std::io::Error) {
     eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset));
 }
 
-// fn url_fetch(link: &str) -> Result<String,  reqwest::Error> {
-//     let result = reqwest::blocking::get(link)?.text().unwrap();
-//     Ok(result)\
-// }
-//
-// fn json_parser(json: String) -> Result<Value, Box<dyn Error>> {
-//     let json_d: serde_json::Value = serde_json::from_str(&json)?;
-//     Ok(json_d)
-// }
-
 fn queue_message(message_to_queue: String) -> Result<(), Box<dyn Error>> {
     let queued_messages_path: String = format!("channels/{}_queued_messages.txt", unsafe { &CHANNEL });
     println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
@@ -74,8 +64,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
             send_raw_message(&mut wstream, "CAP REQ :twitch.tv/tags").unwrap_or_else(|err| { error_reporter(err); });
             send_raw_message(&mut wstream, "CAP REQ :twitch.tv/commands").unwrap_or_else(|err| { error_reporter(err); });
             send_raw_message(&mut wstream, "CAP REQ :twitch.tv/membership").unwrap_or_else(|err| { error_reporter(err); });
-            send_raw_message(&mut wstream, format!("NICK justinfan{}", rng.gen_range(10000000..99999999)).as_str()).unwrap_or_else(|err| { error_reporter(err); });
-            send_raw_message(&mut wstream, format!("JOIN #{}", channel).as_str()).unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, &format!("NICK justinfan{}", rng.gen_range(10000000..99999999))).unwrap_or_else(|err| { error_reporter(err); });
+            send_raw_message(&mut wstream, &format!("JOIN #{}", channel)).unwrap_or_else(|err| { error_reporter(err); });
 
             while std::io::BufRead::read_line(&mut stream, &mut buff)? > 0 {
                 let buffer = buff.trim();
@@ -95,10 +85,10 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let user = extract_tags(&buffer);
                     let raw_user: Vec<&str> = user["user-type"].split(|c| c == '!' || c == '@').collect();
                     let raw_user = raw_user[1];
-                    let raw_message = buffer.rsplit(format!("{} :", channel).as_str()).next().unwrap().trim().to_string();
+                    let raw_message = buffer.rsplit(&format!("{} :", channel)).next().unwrap().trim();
                     let raw_user = raw_user.to_string();
                     let user_id = user["user-id"].to_string();
-                    println!("[{}] [{}] {}[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user["user-id"], raw_message);
+                    println!("[{}] [{}] {}[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user_id, raw_message);
 
                     match Client::connect(&format!("postgresql://postgres:postgres@localhost:5432/{}", &CHANNEL), NoTls) {
                         Ok(mut conn) => {
@@ -126,7 +116,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                     remove_file(&queued_messages_path).unwrap_or_else(|err| error_reporter(err));
                                 }
                                 let nt: NaiveDateTime = NaiveDate::from_ymd(Local::now().format("%Y").to_string().parse::<i32>().unwrap(), Local::now().format("%m").to_string().parse::<u32>().unwrap(), Local::now().format("%d").to_string().parse::<u32>().unwrap()).and_hms(Local::now().format("%H").to_string().parse::<u32>().unwrap(), Local::now().format("%M").to_string().parse::<u32>().unwrap(), Local::now().format("%S").to_string().parse::<u32>().unwrap());
-                                match conn.execute(&stmt, &[&nt, &raw_user, &user["user-id"], &raw_message]) {
+                                match conn.execute(&stmt, &[&nt, &raw_user, &user_id, &raw_message]) {
                                     Ok(_) => {}
                                     Err(e) => {
                                         eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
