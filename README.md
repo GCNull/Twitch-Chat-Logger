@@ -5,7 +5,7 @@ To run the chat logger, ``cargo r --release <channel>``
 
 This chat logger is a personal project of mine, but it does offer some good benefits.
 
-* It uses Postgresql to store the messages. For every channel that you log a new database will be made inside of Postgres. I did this
+* It uses Postgresql to store the messages. For every channel that you log, a new database will be made inside of Postgres. I did this
 to help keep tables organised and reduces disk usage removing the need for a ``channel`` column on the messages table.
 
 
