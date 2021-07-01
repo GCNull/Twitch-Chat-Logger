@@ -6,17 +6,17 @@ To run the chat logger, ``cargo r --release <channel>``
 This chat logger is a personal project of mine, but it does offer some good benefits.
 
 * It uses Postgresql to store the messages. For every channel that you log, a new database will be made inside of Postgres. I did this
-to help keep tables organised and reduces disk usage removing the need for a ``channel`` column on the messages table.
+  to help keep tables organised and reduces disk usage removing the need for a ``channel`` column on the messages table.
 
 
 * If the messages table is locked then the logger will see this and append messages into a txt file in the ``channels`` directory.
-Once the messages table is unlocked then the logger will automatically read the txt file and insert the queued messages into the database without
-any interaction from the user.
+  Once the messages table is unlocked then the logger will automatically read the txt file and insert the queued messages into the database without
+  any interaction from the user.
 
 
 * Upon each new message, a new database connection is made. This worked well for me because if the database crashes or is offline for whatever reason
-then the logger won't have to be restarted just to establish a new connection to the db.
-    * *After testing this in extremely high message rate channels this proved to have very little effect on the CPU (in my case at least) however, if this is inefficient, please let me know as I'm open to any suggestion which could improve my knowledge of programming.*
+  then the logger won't have to be restarted just to establish a new connection to the db.
+  * *After testing this in extremely high message rate channels this proved to have very little effect on the CPU (in my case at least) however, if this is inefficient, please let me know as I'm open to any suggestion which could improve my knowledge of programming.*
 
 
 
@@ -25,5 +25,8 @@ for any messages which have been queued up, so don't delete the folder or any fi
 deleted when needed.
 
 You will need to setup Postgresql yourself for this logger to work but the tables and indexes will be generated automatically.
-To connect to the Postgresql database, you need to input your own Postgres username and password which can be found in the ``config.json`` file. Example: {"username": "MyUsername", "password": "MyPassword"}
+To connect to the Postgresql database, you need to input your own Postgres username and password which can be found in the ``config.json`` file. Example:
+```json
+{"username": "MyUsername", "password": "MyPassword"}
+```
 The file by default uses the postgres username.
