@@ -23,3 +23,7 @@ then the logger won't have to be restarted just to establish a new connection to
 After running the logger a new directory called ``channels`` will be made. This folder will be used
 for any messages which have been queued up, so don't delete the folder or any files inside it. They will be automatically
 deleted when needed.
+
+You will need to setup Postgresql yourself for this logger to work but the tables and indexes will be generated automatically.
+To connect to the Postgresql database, you need to input your own Postgres username and password which can be found in the ``config.json`` file. Example: {"username": "MyUsername", "password": "MyPassword"}
+The file by default uses the postgres username.
