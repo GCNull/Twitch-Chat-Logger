@@ -1,6 +1,6 @@
 [package]
 name = "chat_logger"
-version = "2.2.3"
+version = "2.2.4"
 authors = ["GCNull"]
 edition = "2018"
 

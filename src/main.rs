@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::fs::{File, OpenOptions, remove_file, create_dir};
+use std::fs::{create_dir, File, OpenOptions, remove_file};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{Shutdown, TcpStream};
 use std::net::Shutdown::Both;
@@ -13,9 +13,9 @@ use std::time::*;
 use chrono::{NaiveDate, NaiveDateTime, prelude::*};
 use postgres::{Client, NoTls};
 use rand::{Rng, thread_rng};
-use termion::color;
 use serde_derive::Deserialize;
 use serde_json;
+use termion::color;
 
 const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut CHANNEL: String = String::new();
@@ -199,7 +199,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 
 unsafe fn create_database() -> Result<(), Box<dyn Error>> {
     let p = read_json_from_file("config.json").unwrap();
-    process::Command::new("sh").arg("scripts/create_db.sh").arg(CHANNEL.to_string()).spawn()?.wait()?;
+    let pp = &p.username;
+    process::Command::new("sh").arg("scripts/create_db.sh").arg(pp).arg(CHANNEL.to_string()).spawn()?.wait()?;
     let mut conn = Client::connect(&format!("postgresql://{}:{}@localhost:5432/{}", p.username, p.password, &CHANNEL), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
                     date TIMESTAMP WITHOUT TIME ZONE,
