@@ -106,7 +106,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                     let user_id = user["user-id"].to_string();
                     println!("[{}] [{}] {}[{}]: {}", channel, Local::now().format("%T %d/%m/%G").to_string(), raw_user, user_id, raw_message);
 
-                    match Client::connect(&format!("postgresql://{}:{}@localhost:5432/{}", p.username, p.password,&CHANNEL), NoTls) {
+                    match Client::connect(&format!("postgresql://{}:{}@localhost:5432/{}", p.username, p.password, &CHANNEL), NoTls) {
                         Ok(mut conn) => {
                             let trans_pid = conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]).unwrap();
                             if trans_pid.is_empty() {
@@ -175,12 +175,14 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 
     fn send_raw_message<W: Write>(w: &mut W, msg: &str) -> Result<(), std::io::Error> {
         let message = format!("{}\r\n", msg);
-        if w.write(message.as_bytes()).is_ok() {
-            if w.flush().is_ok() {} else {
-                eprintln!("Failed to send raw data")
+        match w.write(message.as_bytes()) {
+            Ok(_) => {
+                match w.flush() {
+                    Ok(_) => {}
+                    Err(e) => eprintln!("Failed to send raw data: {:?}", e)
+                }
             }
-        } else {
-            eprintln!("Failed to write raw data into buffer");
+            Err(e) => eprintln!("Failed to write raw data into buffer: {:?}", e),
         }
         Ok(())
     }
@@ -198,9 +200,8 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 }
 
 unsafe fn create_database() -> Result<(), Box<dyn Error>> {
-    let p = read_json_from_file("config.json").unwrap();
-    let pp = &p.username;
-    process::Command::new("sh").arg("scripts/create_db.sh").arg(pp).arg(CHANNEL.to_string()).spawn()?.wait()?;
+    let p = read_json_from_file("config.json")?;
+    process::Command::new("sh").arg("scripts/create_db.sh").arg(&p.username).arg(CHANNEL.to_string()).spawn()?.wait()?;
     let mut conn = Client::connect(&format!("postgresql://{}:{}@localhost:5432/{}", p.username, p.password, &CHANNEL), NoTls).unwrap();
     conn.execute("CREATE TABLE IF NOT EXISTS messages(
                     date TIMESTAMP WITHOUT TIME ZONE,
