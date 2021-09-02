@@ -55,8 +55,8 @@ fn error_reporter(err: std::io::Error) {
 fn queue_message(message_to_queue: String) -> Result<(), Box<dyn Error>> {
     let queued_messages_path: String = format!("channels/{}_queued_messages.txt", unsafe { &CHANNEL });
     println!("{}Queuing: {}{}", color::Fg(color::Yellow), message_to_queue, color::Fg(color::Reset));
-    let mut wfile = OpenOptions::new().create(true).append(true).open(&queued_messages_path).unwrap();
-    wfile.write(format!("{}\n", message_to_queue).as_bytes()).unwrap();
+    let mut wfile = OpenOptions::new().create(true).append(true).open(&queued_messages_path)?;
+    wfile.write(format!("{}\n", message_to_queue).as_bytes())?;
     Ok(())
 }
 
@@ -108,47 +108,51 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
 
                     match Client::connect(&format!("postgresql://{}:{}@localhost:5432/{}", p.username, p.password, &CHANNEL), NoTls) {
                         Ok(mut conn) => {
-                            let trans_pid = conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]).unwrap();
-                            if trans_pid.is_empty() {
-                                let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
-                                if Path::new(&queued_messages_path).exists() {
-                                    let queued_messages_file = File::open(&queued_messages_path)?;
-                                    let read = BufReader::new(queued_messages_file);
-                                    for i in read.lines() {
-                                        let line = i.unwrap_or_default();
-                                        let split: Vec<_> = line.split(" ").collect();
-                                        println!("{}From queue: {:?}{}", color::Fg(color::Green), split, color::Fg(color::Reset));
-                                        let date = NaiveDate::parse_from_str(split[0], "%Y-%m-%d").unwrap();
-                                        let time = NaiveTime::parse_from_str(split[1], "%T").unwrap();
-                                        let nt: NaiveDateTime = NaiveDateTime::new(date, time); // 2021-06-25 00:00:00
-                                        match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4..].join(" ")]) {
+                            match conn.query("select pid, state, usename, query, query_start from pg_stat_activity where pid in (select pid from pg_locks l join pg_class t on l.relation = t.oid and t.relkind = 'r' where t.relname = 'messages')", &[]) {
+                                Ok(trans_pid) => {
+                                    if trans_pid.is_empty() {
+                                        let stmt = conn.prepare("INSERT INTO messages (date, username, user_id, message) VALUES ($1, $2, $3, $4)")?;
+                                        if Path::new(&queued_messages_path).exists() {
+                                            let queued_messages_file = File::open(&queued_messages_path)?;
+                                            let read = BufReader::new(queued_messages_file);
+                                            for i in read.lines() {
+                                                let line = i.unwrap_or_default();
+                                                let split: Vec<_> = line.split(" ").collect();
+                                                println!("{}From queue: {}{}", color::Fg(color::Green), split.join(" "), color::Fg(color::Reset));
+                                                let date = NaiveDate::parse_from_str(split[0], "%Y-%m-%d")?;
+                                                let time = NaiveTime::parse_from_str(split[1], "%T")?;
+                                                let nt: NaiveDateTime = NaiveDateTime::new(date, time); // 2021-06-25 00:00:00
+                                                match conn.execute(&stmt, &[&nt, &split[2], &split[3], &split[4..].join(" ")]) {
+                                                    Ok(_) => {}
+                                                    Err(e) => {
+                                                        println!("{:?}", e);
+                                                        socket.shutdown(Both).unwrap_or_default();
+                                                    }
+                                                }
+                                            }
+                                            remove_file(&queued_messages_path).unwrap_or_else(|err| error_reporter(err));
+                                        }
+                                        let date = NaiveDate::parse_from_str(&Local::now().format("%Y-%m-%d").to_string(), "%Y-%m-%d")?;
+                                        let time = NaiveTime::parse_from_str(&Local::now().format("%T").to_string(), "%H:%M:%S")?;
+                                        let nt: NaiveDateTime = NaiveDateTime::new(date, time);
+                                        match conn.execute(&stmt, &[&nt, &raw_user, &user_id, &raw_message]) {
                                             Ok(_) => {}
                                             Err(e) => {
-                                                println!("{:?}", e);
-                                                socket.shutdown(Both).unwrap_or_default();
+                                                eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
+                                                let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
+                                                queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
+                                                socket.shutdown(Both).unwrap_or_default(); // We do this to break out of the loop imediately instead of on the next message which would cause us to lose a message
+                                                break;
                                             }
                                         }
-                                    }
-                                    remove_file(&queued_messages_path).unwrap_or_else(|err| error_reporter(err));
-                                }
-                                let date = NaiveDate::parse_from_str(&Local::now().format("%Y-%m-%d").to_string(), "%Y-%m-%d").unwrap();
-                                let time = NaiveTime::parse_from_str(&Local::now().format("%T").to_string(), "%H:%M:%S").unwrap();
-                                let nt: NaiveDateTime = NaiveDateTime::new(date, time);
-                                match conn.execute(&stmt, &[&nt, &raw_user, &user_id, &raw_message]) {
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        eprintln!("Error 1 writing to db: {:?}\nAdding message to queue and restarting...\n", e);
+                                        conn.close()?;
+                                    } else {
+                                        println!("Messages table is busy adding message to queue...");
                                         let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
                                         queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
-                                        socket.shutdown(Both).unwrap_or_default(); // We do this to break out of the loop imediately instead of on the next message which would cause us to lose a message
-                                        break;
                                     }
                                 }
-                                conn.close()?;
-                            } else {
-                                println!("Messages table is busy adding message to queue...");
-                                let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
-                                queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
+                                Err(e) => eprintln!("{:?}", e)
                             }
                         }
                         Err(e) => {
@@ -165,7 +169,7 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                 }
                 buff.clear();
             }
-            if std::io::BufRead::read_line(&mut stream, &mut buff).unwrap() == 0 {
+            if std::io::BufRead::read_line(&mut stream, &mut buff)? == 0 {
                 socket.shutdown(Shutdown::Write).unwrap_or_else(|err| eprintln!("Failed to shutdown socket: {}", err));
                 eprintln!("\n{}Socket disconnected{}", color::Fg(color::Red), color::Fg(color::Reset));
             }
