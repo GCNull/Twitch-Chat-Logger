@@ -1,3 +1,10 @@
+// #[cfg(not(target_env = "msvc"))]
+// use jemallocator::Jemalloc;
+//
+// #[cfg(not(target_env = "msvc"))]
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
+
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
@@ -152,7 +159,12 @@ fn bot(channel: String) -> Result<(), Box<dyn Error>> {
                                         queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
                                     }
                                 }
-                                Err(e) => eprintln!("{:?}", e)
+                                Err(e) => {
+                                    eprintln!("An error occured inside the db!: {:?}", e);
+                                    let message_to_queue = format!("{} {} {} {}", Local::now().format("%G-%m-%d %T"), raw_user, user_id, raw_message);
+                                    queue_message(message_to_queue).unwrap_or_else(|err| eprintln!("{}An error occurred while logging message to file: {:?}{}", color::Fg(color::Red), err, color::Fg(color::Reset)));
+
+                                }
                             }
                         }
                         Err(e) => {
