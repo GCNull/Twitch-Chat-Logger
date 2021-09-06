@@ -23,6 +23,7 @@ use rand::{Rng, thread_rng};
 use serde_derive::Deserialize;
 use serde_json;
 use termion::color;
+use std::any::Any;
 
 const BOT_VERSION: &str = env!("CARGO_PKG_VERSION");
 static mut CHANNEL: String = String::new();
@@ -230,7 +231,7 @@ unsafe fn create_database() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Any + Send + 'static>> {
     std::process::Command::new("clear").status().unwrap();
     let config = Config::new(env::args()).unwrap_or_else(|err| {
         eprintln!("{}Error: {}{}", color::Fg(color::Red), err, color::Fg(color::Reset));
@@ -251,13 +252,16 @@ fn main() {
         });
     }
 
-    loop {
-        unsafe {
-            bot(CHANNEL.to_string()).unwrap_or_else(|err| {
-                eprintln!("{}{}{}", color::Fg(color::Red), err, color::Fg(color::Reset))
-            });
-            println!("Bot function ending. Attempting to repeat loop...");
-            sleep(50);
+    let builder = thread::Builder::new().name("Chat_logger".to_owned());
+    builder.spawn(|| {
+        loop {
+            thread::spawn(|| unsafe {
+                bot(CHANNEL.to_string()).unwrap_or_else(|err| {eprintln!("{}{:?}{}", color::Fg(color::Red), err, color::Fg(color::Reset))});
+                println!("Chat_logger ending. Attempting to repeat loop...");
+                sleep(100);
+            }).join().unwrap_or_else(|err| println!("Inner Chat_logger thread crashed: {:?}", err));
+            sleep(1000)
         }
-    }
+    }).unwrap().join()?;
+    Ok(())
 }
